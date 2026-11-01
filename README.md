@@ -63,9 +63,15 @@ python -m httpkit ua "vso-httptool/1.0 (Linux) Mozilla/5.0"
 - QUIC and HTTP/3: flow-control violations, final-size changes, stream-limit abuse, crypto-buffer overflow, transport-parameter mismatches, and malformed or forbidden HTTP/3 frames close the connection.
 - The CLI escapes terminal control sequences in headers and bodies when writing to a TTY.
 
+## Author seal and notice
+
+The author and license notice are constants in `httpkit/_vso.py`, and the package seals itself. Every module in `httpkit/` is hashed into `_seal.py`, and a root hash is stored in `_vso.py`. `import httpkit` raises `ImportError` if any file, the notice, or the seal has been changed. Using the tool (`Client()`, `tls.insp()`, the CLI) prints the authorized-use warning and the notice once per process to stderr, so piped output stays clean.
+
+The license is still MIT. MIT allows modification, so the seal is tamper-evidence, not a lock. If you edit the code, run `python tools/seal.py` and keep the copyright notice and `LICENSE` as MIT requires. A determined person can remove the check in minutes, so the legal protection is the MIT copyright notice, not the code.
+
 ## Status and limits
 
-Tested: 75 tests. They cover the RFC 7541 and RFC 9001 vectors, wire-level attack cases, a malicious HTTP/2 server, and live interop against `hypercorn` (aioquic) over h1, h2 and h3. The h3 live tests include a 3 MB download, a 300 KB upload, 30 concurrent streams, Alt-Svc upgrade, and downloads that complete under 5% and 15% simulated packet loss.
+Tested: 84 tests. They cover the RFC 7541 and RFC 9001 vectors, wire-level attack cases, a malicious HTTP/2 server, and live interop against `hypercorn` (aioquic) over h1, h2 and h3. The h3 live tests include a 3 MB download, a 300 KB upload, 30 concurrent streams, Alt-Svc upgrade, and downloads that complete under 5% and 15% simulated packet loss.
 
 Not yet tested against large public HTTP/3 servers. Interop so far is with aioquic.
 

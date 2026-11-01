@@ -2,6 +2,7 @@ import hashlib
 import socket
 import ssl
 
+from . import _vso
 from .conn import mk_ctx
 from .err import TlsError
 
@@ -23,6 +24,7 @@ def cipher_info(name):
 
 
 def insp(host, port=443, tmo=10.0, verify=True, ca=None, alpn=("h2", "http/1.1")):
+    _vso.inf_warn()
     ctx = mk_ctx(verify, ca, alpn)
     try:
         raw = socket.create_connection((host, port), tmo)

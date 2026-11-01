@@ -2,7 +2,7 @@ import json
 import re
 import sys
 
-from . import VSO_VER
+from . import VSO_NOTICE, VSO_VER, _vso
 from .client import Client
 from .err import HttpkitError
 from .tls import fmt_insp, insp
@@ -84,7 +84,7 @@ def parse_args(av):
             sys.stdout.write(USG)
             raise SystemExit(0)
         elif a == "--version":
-            print("httpkit %s" % VSO_VER)
+            print("httpkit %s\n%s" % (VSO_VER, VSO_NOTICE))
             raise SystemExit(0)
         elif a.startswith("-") and len(a) > 1:
             raise SystemExit("unknown option: %s" % a)
@@ -156,6 +156,7 @@ def do_ua(av):
 
 def main(av=None):
     av = list(sys.argv[1:] if av is None else av)
+    _vso.inf_warn()
     try:
         if av and av[0] == "tls":
             return do_tls(av[1:])

@@ -4,6 +4,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from . import _vso
 from .body import dec_enc
 from .conn import Conn
 from .cookie import Jar
@@ -37,6 +38,7 @@ def h3_ok():
 
 class Client:
     def __init__(self, proto="auto", verify=True, ca=None, tmo=30.0, follow=True, jar=True, hdrs=None, lim=None, guard=None, ua=VSO_UA, h3=True):
+        _vso.inf_warn()
         if proto not in ("auto", "h1", "h2", "h3"):
             raise ClientError("proto must be auto, h1, h2 or h3")
         self.proto = proto
