@@ -71,7 +71,7 @@ The license is still MIT. MIT allows modification, so the seal is tamper-evidenc
 
 ## Status and limits
 
-Tested: 84 tests. They cover the RFC 7541 and RFC 9001 vectors, wire-level attack cases, a malicious HTTP/2 server, and live interop against `hypercorn` (aioquic) over h1, h2 and h3. The h3 live tests include a 3 MB download, a 300 KB upload, 30 concurrent streams, Alt-Svc upgrade, and downloads that complete under 5% and 15% simulated packet loss.
+Tested: 84 tests (live and QUIC tests skip themselves if `cryptography` is unusable). They cover the RFC 7541 and RFC 9001 vectors, wire-level attack cases, a malicious HTTP/2 server, and live interop against `hypercorn` (aioquic) over h1, h2 and h3. The h3 live tests include a 3 MB download, a 300 KB upload, 30 concurrent streams, Alt-Svc upgrade, and downloads that complete under 5% and 15% simulated packet loss.
 
 Not yet tested against large public HTTP/3 servers. Interop so far is with aioquic.
 

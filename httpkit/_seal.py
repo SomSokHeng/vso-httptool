@@ -1,11 +1,11 @@
 SEAL = {
-    '__init__.py': '33826b1b4d088666b4bd9bed8a67efcaa49ca124a9d0e2ad6fc974ecc670ca06',
+    '__init__.py': '346ca1a85baa67442e267350d255f5a9b9c2504882211f031222adcdfc4b0b0a',
     '__main__.py': '13a1a5b340cdcfc1902b62be90e508c7c71886000d5bf087e7854aadf09fb35e',
     '_huf.py': '7a3a4bee545baec12b6cbba99dc628630238845ff4226cba326964ccd4291c52',
     '_vso.py': '5dcae0f5a1925695b87228225712c2d19bd7041dc43d8dfda34497de5ece3d43',
     'body.py': '0d15e387e969a9b073e495e5672cc7a669c8e8f7ce3a3623e588171630cd87e1',
     'cli.py': '5f48b7edc6326c1670fa869beba9aa743aea48efedcd01daffbffbd4fb1f4546',
-    'client.py': '9cbbbb5b831465b94bae5de84e278bbd2dd7ef9b24fe9caf9b9e37e8e43cbcf2',
+    'client.py': '775976fb4e4f62a83236fe602598186ad654cc0df2a48b49476dd7a712fe0158',
     'conn.py': '31cf178f0e3185bfdc32d55513d48aee9fcf57e1f81497001186351be01de081',
     'cookie.py': 'e6c5869014755342c79856b8221754de5a143cba8dcbcf6a7470b92ff152a1c0',
     'err.py': '60f9762dd6a59a16dc1a7aa3d189e0cdeee2708e616a2e89b5af70bc8612bc5f',

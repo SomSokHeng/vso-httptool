@@ -99,6 +99,10 @@ class Client:
                 try:
                     from .h3 import open_h3
                     return open_h3(u, port, self.guard, tmo, self.verify, self.ca, self.lim)
+                except ImportError as e:
+                    if self.proto == "h3":
+                        raise ClientError("HTTP/3 needs a working 'cryptography' install: %s" % e) from None
+                    self.bad[u.origin] = time.monotonic() + 3600
                 except Exception:
                     if self.proto == "h3":
                         raise

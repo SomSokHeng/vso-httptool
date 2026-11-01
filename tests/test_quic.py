@@ -1,6 +1,10 @@
 import unittest
 
-from httpkit.quic import QConn, Sp, dec_pn, init_keys, rvi, vi
+try:
+    from httpkit.quic import QConn, Sp, dec_pn, init_keys, rvi, vi
+    CRY = True
+except Exception:
+    CRY = False
 
 try:
     from aioquic.quic.crypto import CryptoPair
@@ -9,6 +13,7 @@ except Exception:
     HAVE = False
 
 
+@unittest.skipUnless(CRY, "cryptography not usable")
 class QuicT(unittest.TestCase):
     def test_initial_keys(self):
         c, s = init_keys(bytes.fromhex("8394c8f03e515708"))
@@ -39,7 +44,7 @@ class QuicT(unittest.TestCase):
         fr, p = rvi(f, p)
         self.assertEqual((lg, cnt, fr), (10, 2, 0))
 
-    @unittest.skipUnless(HAVE, "needs aioquic")
+    @unittest.skipUnless(HAVE and CRY, "needs aioquic")
     def test_interop_protection(self):
         dcid = bytes.fromhex("8394c8f03e515708")
         pair = CryptoPair()
