@@ -11,7 +11,7 @@ from .msg import Req, Resp
 from .sec import InfGuard, Lim, vso_lim
 from .ua import VSO_UA, parse_ua, ua_str
 
-VSO_VER = "1.0.2"
+VSO_VER = "1.0.3"
 __version__ = VSO_VER
 __author__ = _vso.VSO_AUTHOR
 __license__ = _vso.VSO_LICENSE

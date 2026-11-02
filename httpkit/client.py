@@ -56,6 +56,7 @@ class Client:
         self.alt = {}
         self.bad = {}
         self.lk = threading.RLock()
+        self.h3lk = threading.Lock()
 
     def __enter__(self):
         return self
@@ -121,25 +122,37 @@ class Client:
             return H2Conn(c, self.lim, tmo)
         return H1Conn(c, self.lim)
 
+    def retire(self, c):
+        if isinstance(c, H1Conn):
+            c.close()
+            return
+        t = threading.Timer(30.0, c.close)
+        t.daemon = True
+        t.start()
+
     def try_h3(self, u):
-        port = self.alt_for(u)
-        if not port:
+        if not self.alt_for(u):
             return None
-        try:
-            from .h3 import open_h3
-            c = open_h3(u, port, self.guard, self.tmo, self.verify, self.ca, self.lim)
-        except Exception:
-            self.bad[u.origin] = time.monotonic() + 300
-            return None
-        with self.lk:
-            old = self.pool.get(u.origin)
-            self.pool[u.origin] = c
-        if old is not None:
+        with self.h3lk:
+            with self.lk:
+                cur = self.pool.get(u.origin)
+            if cur is not None and getattr(cur, "proto", None) == "h3" and cur.alive():
+                return cur
+            port = self.alt_for(u)
+            if not port:
+                return None
             try:
-                old.close()
+                from .h3 import open_h3
+                c = open_h3(u, port, self.guard, self.tmo, self.verify, self.ca, self.lim)
             except Exception:
-                pass
-        return c
+                self.bad[u.origin] = time.monotonic() + 300
+                return None
+            with self.lk:
+                old = self.pool.get(u.origin)
+                self.pool[u.origin] = c
+            if old is not None:
+                self.retire(old)
+            return c
 
     def get_conn(self, u):
         with self.lk:
@@ -166,9 +179,14 @@ class Client:
         if not isinstance(c, H1Conn):
             with self.lk:
                 old = self.pool.get(u.origin)
-                if old is not None and old is not c and old.alive():
-                    pass
-                self.pool[u.origin] = c
+                if old is not None and not isinstance(old, H1Conn) and old.alive():
+                    keep = old
+                else:
+                    self.pool[u.origin] = c
+                    keep = c
+            if keep is not c:
+                c.close()
+                return keep, True
         return c, False
 
     def give_back(self, c, u):

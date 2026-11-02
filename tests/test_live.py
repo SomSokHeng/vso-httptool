@@ -60,6 +60,13 @@ class LiveT(unittest.TestCase):
         with Client(proto="h3", verify=False) as c:
             self.assertEqual(c.get(self.url("/echo", True)).status, 200)
 
+    def test_alt_svc_concurrent(self):
+        with Client(proto="auto", ca=self.s.ca) as c:
+            c.get(self.url("/echo"))
+            rs = c.map([self.url("/echo?i=%d" % i) for i in range(24)], workers=8)
+            self.assertTrue(all(r.status == 200 for r in rs))
+            self.assertEqual(c.get(self.url("/echo")).proto, "h3")
+
     def test_alt_svc_upgrade(self):
         with Client(proto="auto", ca=self.s.ca) as c:
             a = c.get(self.url("/echo"))
