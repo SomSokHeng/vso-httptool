@@ -5,10 +5,22 @@ HTTP/1.1, HTTP/2 and HTTP/3 (QUIC) client and protocol toolkit. Pure Python. The
 The QUIC transport, TLS 1.3 handshake, QPACK, HPACK and the HTTP/2 frame engine are all implemented in this repo, not wrapped from another library.
 
 ```
-pip install .                      # core: h1 + h2, stdlib only
-pip install -r requirements.txt    # adds HTTP/3 (cryptography)
-pip install -r requirements-dev.txt # tests, brotli, local h3 test server
+git clone https://github.com/SomSokHeng/vso-httptool.git
+cd vso-httptool
+python install.py          # installs the library, works from any folder
+python install.py --h3     # also installs cryptography for HTTP/3
 ```
+
+After that, `from httpkit import Client` works anywhere, and so does the `httpkit` command. No PyPI needed.
+
+| command | does |
+|---|---|
+| `python install.py -e` | link to the clone, so `git pull` and your edits apply at once |
+| `python install.py --update` | `git pull --ff-only`, then reinstall |
+| `python install.py --check` | show whether it imports from any folder, and whether h3 is usable |
+| `python install.py --uninstall` | remove it |
+
+The installer refuses a copy that fails the integrity seal, retries with `--break-system-packages` on externally-managed Pythons, and builds from a temporary copy so the clone stays clean. Plain `pip install .` and `pip install -r requirements.txt` still work.
 
 On Termux, if the pip build of `cryptography` fails to load, run `pip uninstall cryptography` and `pkg install python-cryptography`. h1 and h2 work without it.
 
