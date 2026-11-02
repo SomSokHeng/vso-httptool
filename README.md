@@ -5,10 +5,12 @@ HTTP/1.1, HTTP/2 and HTTP/3 (QUIC) client and protocol toolkit. Pure Python. The
 The QUIC transport, TLS 1.3 handshake, QPACK, HPACK and the HTTP/2 frame engine are all implemented in this repo, not wrapped from another library.
 
 ```
-pip install .            # core: h1 + h2, stdlib only
-pip install ".[h3]"      # adds HTTP/3 over QUIC
-pip install ".[h3,br]"   # adds brotli decoding
+pip install .                      # core: h1 + h2, stdlib only
+pip install -r requirements.txt    # adds HTTP/3 (cryptography)
+pip install -r requirements-dev.txt # tests, brotli, local h3 test server
 ```
+
+On Termux, if the pip build of `cryptography` fails to load, run `pip uninstall cryptography` and `pkg install python-cryptography`. h1 and h2 work without it.
 
 ## Use
 
