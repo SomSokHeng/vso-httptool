@@ -1,5 +1,9 @@
 import platform
+import random
 import re
+import threading
+
+from .hdr import chk
 
 VSO_UA = "vso-httptool/1.0"
 
@@ -47,3 +51,32 @@ def parse_ua(s):
             prods.append((m.group(1), m.group(2) or ""))
             i = m.end()
     return {"products": prods, "comments": cmts}
+
+
+UA_MODES = ("round-robin", "random", "sticky")
+
+
+class UaPool:
+    def __init__(self, items, mode="round-robin"):
+        if mode not in UA_MODES:
+            raise ValueError("ua_rotate must be one of: %s" % ", ".join(UA_MODES))
+        items = [items] if isinstance(items, str) else list(items)
+        if not items:
+            raise ValueError("empty user-agent list")
+        self.items = [chk("User-Agent", s)[1] for s in items]
+        self.mode = mode
+        self.n = 0
+        self.stick = {}
+        self.lk = threading.Lock()
+
+    def pick(self, origin=None):
+        with self.lk:
+            if self.mode == "random":
+                return random.choice(self.items)
+            if self.mode == "sticky" and origin in self.stick:
+                return self.items[self.stick[origin]]
+            i = self.n % len(self.items)
+            self.n += 1
+            if self.mode == "sticky":
+                self.stick[origin] = i
+            return self.items[i]

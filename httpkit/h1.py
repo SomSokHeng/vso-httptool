@@ -62,11 +62,11 @@ class Rdr:
         return out
 
 
-def ser_req(req, keep=True):
+def ser_req(req, keep=True, abs_form=False):
     m = req.mth
     if not TOK.match(m.encode("latin-1")):
         raise SecError("bad method")
-    t = req.url.target
+    t = str(req.url) if abs_form else req.url.target
     h = req.hdrs.copy()
     h.setdef("Host", req.url.authority)
     if not keep:
@@ -189,7 +189,7 @@ class H1Conn:
         return not self.rd.b
 
     def req(self, req):
-        self.c.send(ser_req(req))
+        self.c.send(ser_req(req, abs_form=getattr(self.c, "abs_form", False)))
         self.n += 1
         try:
             r, keep = rd_resp(self.rd, req.mth, self.lim)

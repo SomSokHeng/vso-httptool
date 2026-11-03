@@ -52,6 +52,39 @@ python -m httpkit tls example.com:443
 python -m httpkit ua "vso-httptool/1.0 (Linux) Mozilla/5.0"
 ```
 
+## Proxies and user agents
+
+```python
+from httpkit import Client
+
+with Client(proxies=["http://u:p@10.0.0.1:8080", "socks5h://127.0.0.1:9050"],
+            rotate="round-robin",
+            uas=["MyTool/1.0", "MyTool/2.0"], ua_rotate="random") as c:
+    r = c.get("https://example.com")
+    print(r.proxy, r.ua)
+```
+
+| option | does |
+|---|---|
+| `proxy="URL"` / `proxies=[...]` | one proxy or a list; `proxy="env"` reads `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy` |
+| `rotate=` | `round-robin` (default), `random` or `sticky` (one proxy per origin) |
+| `no_proxy="a.com,.b.com,10.0.0.0/8"` | hosts that skip the proxy |
+| `uas=[...]` or `uas=callable` | user-agent list or your own function; `ua_rotate=` takes the same three modes |
+| `req(..., proxy="URL")` or `proxy="direct"` | override for one request |
+| an explicit `User-Agent` header | wins over rotation |
+
+Proxy types: `http`, `https` (TLS to the proxy, including TLS inside TLS for https targets), `socks4`, `socks4a`, `socks5`, `socks5h`, each with optional `user:pass@`. `load_list(path)` reads one entry per line.
+
+The library only accepts and rotates what you give it. It does not check proxy health, skip dead proxies, retry on another proxy, or judge user-agent age or quality. A dead proxy raises `ProxyError` or `ConnError`, and a proxy that answers 407 or 502 to a plain-http request returns that response. Handling that is your tool's job.
+
+Notes:
+- HTTP/3 does not go through proxies, so `proto="h3"` with a proxy is refused and `auto` stays on TCP.
+- The target's certificate is still verified through the tunnel. An `http://` target through a proxy is visible to that proxy.
+- `socks4` and `socks5` resolve the target locally. `socks4a`, `socks5h` and http(s) proxies resolve it at the proxy. The private-redirect guard always resolves locally for its own check.
+- Proxy passwords are never printed. `Proxy` repr and `res.proxy` mask them.
+
+CLI: `python -m httpkit -v -n 5 --proxy-file proxies.txt --rotate random --ua-file agents.txt https://example.com`
+
 ## Layout
 
 | module | role |
@@ -62,6 +95,7 @@ python -m httpkit ua "vso-httptool/1.0 (Linux) Mozilla/5.0"
 | `quic.py` `tls13.py` | QUIC v1 transport (RFC 9000/9001/9002) and TLS 1.3 client handshake |
 | `h3.py` `qpack.py` | HTTP/3 (RFC 9114) and QPACK static-table codec |
 | `sec.py` `follow.py` | limits, SSRF guard, redirect policy |
+| `proxy.py` | proxy parsing, rotation, HTTP CONNECT, SOCKS4/4a/5/5h, TLS-in-TLS |
 | `cookie.py` `url.py` `hdr.py` `msg.py` `ua.py` | supporting pieces |
 | `tls.py` `conn.py` | TCP/TLS connect and TLS session inspection |
 

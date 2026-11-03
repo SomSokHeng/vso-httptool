@@ -27,6 +27,8 @@ class Resp:
         self.hist = []
         self.trailers = Hdrs()
         self.elapsed = 0.0
+        self.proxy = None
+        self.ua = None
 
     @property
     def ok(self):

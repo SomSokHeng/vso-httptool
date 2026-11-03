@@ -5,6 +5,7 @@ import threading
 import time
 
 from .err import ConnError, TlsError
+from .proxy import Nest, open_tunnel
 
 
 def mk_ctx(verify=True, ca=None, alpn=None):
@@ -34,9 +35,38 @@ class Conn:
         self.alpn = None
         self.tls_ver = None
         self.cipher = None
+        self.abs_form = False
+        self.proxy = None
 
     @classmethod
-    def open(cls, url, guard, tmo=30.0, verify=True, ca=None, alpn=None):
+    def open_px(cls, url, guard, tmo, verify, ca, alpn, px, pverify, pca, force):
+        raw, absf = open_tunnel(px, url, guard, tmo, pverify, pca, force)
+        c = cls(raw, url.host, url.port, url.scheme == "https")
+        c.abs_form = absf
+        c.proxy = px
+        if not c.tls:
+            raw.settimeout(tmo)
+            return c
+        try:
+            ctx = mk_ctx(verify, ca, alpn)
+            s = Nest.wrap(raw, ctx, url.host, tmo) if isinstance(raw, ssl.SSLSocket) else ctx.wrap_socket(raw, server_hostname=url.host)
+        except ssl.SSLError as e:
+            raw.close()
+            raise TlsError("tls handshake failed: %s" % e) from e
+        except OSError as e:
+            raw.close()
+            raise ConnError("tls handshake failed: %s" % e) from e
+        c.sock = s
+        c.alpn = s.selected_alpn_protocol()
+        c.tls_ver = s.version()
+        ci = s.cipher()
+        c.cipher = ci[0] if ci else None
+        return c
+
+    @classmethod
+    def open(cls, url, guard, tmo=30.0, verify=True, ca=None, alpn=None, proxy=None, pverify=None, pca=None, force=False):
+        if proxy is not None:
+            return cls.open_px(url, guard, tmo, verify, ca, alpn, proxy, verify if pverify is None else pverify, ca if pca is None else pca, force)
         addrs = guard.resolve(url.host, url.port)
         last = None
         raw = None

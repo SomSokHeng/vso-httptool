@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vso-httptool"
-version = "1.0.3"
+version = "1.1.0"
 description = "HTTP/1.1, HTTP/2 and HTTP/3 (QUIC) client and protocol toolkit with a hardened-by-default design"
 readme = "README.md"
 requires-python = ">=3.9"

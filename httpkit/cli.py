@@ -5,6 +5,7 @@ import sys
 from . import VSO_NOTICE, VSO_VER, _vso
 from .client import Client
 from .err import HttpkitError
+from .proxy import load_list
 from .tls import fmt_insp, insp
 from .ua import parse_ua
 
@@ -29,6 +30,15 @@ options:
   -o FILE         write body to file
   -t SEC          timeout (default 30)
   --priv          allow redirects into private address space
+  --proxy URL     proxy: http, https, socks4, socks4a, socks5, socks5h (repeatable)
+  --proxy-file F  read proxies from a file, one per line
+  --rotate MODE   round-robin (default), random or sticky
+  --proxy-env     use http_proxy / https_proxy / all_proxy / no_proxy
+  --no-proxy LIST comma list of hosts that bypass the proxy
+  --ua STR        user-agent (repeatable)
+  --ua-file F     read user-agents from a file, one per line
+  --ua-rotate M   round-robin (default), random or sticky
+  -n COUNT        repeat the request COUNT times
   -v              print summary to stderr
 """
 
@@ -38,7 +48,7 @@ def inf_safe(s):
 
 
 def parse_args(av):
-    o = {"mth": None, "hdrs": [], "data": None, "json": None, "proto": "auto", "follow": False, "inc": False, "head": False, "verify": True, "ca": None, "out": None, "tmo": 30.0, "priv": False, "v": False, "url": None}
+    o = {"mth": None, "hdrs": [], "data": None, "json": None, "proto": "auto", "follow": False, "inc": False, "head": False, "verify": True, "ca": None, "out": None, "tmo": 30.0, "priv": False, "v": False, "url": None, "px": [], "rot": "round-robin", "penv": False, "nop": None, "uas": [], "urot": "round-robin", "n": 1}
     i = 0
     while i < len(av):
         a = av[i]
@@ -78,6 +88,24 @@ def parse_args(av):
             o["tmo"] = float(nxt())
         elif a == "--priv":
             o["priv"] = True
+        elif a == "--proxy":
+            o["px"].append(nxt())
+        elif a == "--proxy-file":
+            o["px"] += load_list(nxt())
+        elif a == "--rotate":
+            o["rot"] = nxt()
+        elif a == "--proxy-env":
+            o["penv"] = True
+        elif a == "--no-proxy":
+            o["nop"] = nxt()
+        elif a == "--ua":
+            o["uas"].append(nxt())
+        elif a == "--ua-file":
+            o["uas"] += load_list(nxt())
+        elif a == "--ua-rotate":
+            o["urot"] = nxt()
+        elif a == "-n":
+            o["n"] = max(1, min(1000, int(nxt())))
         elif a == "-v":
             o["v"] = True
         elif a in ("-h", "--help"):
@@ -113,12 +141,24 @@ def do_req(o):
     body = rd_data(o["data"])
     mth = "HEAD" if o["head"] else (o["mth"] or ("POST" if body is not None or o["json"] else "GET"))
     jb = json.loads(o["json"]) if o["json"] is not None else None
-    with Client(proto=o["proto"], verify=o["verify"], ca=o["ca"], tmo=o["tmo"], follow=o["follow"], guard=InfGuard(blk_priv=not o["priv"])) as c:
-        r = c.req(mth, o["url"], hdrs=o["hdrs"], body=body, json=jb)
-    if o["v"]:
-        for h in r.hist:
-            sys.stderr.write("< %d %s -> %s\n" % (h.status, h.proto, inf_safe(h.hdrs.get("location", ""))))
-        sys.stderr.write("< %s %d  %.0f ms  %d bytes\n" % (r.proto, r.status, r.elapsed * 1000, len(r.body)))
+    kw = {}
+    if o["px"]:
+        kw["proxies"] = o["px"]
+        kw["rotate"] = o["rot"]
+    elif o["penv"]:
+        kw["proxy"] = "env"
+    if o["nop"] is not None:
+        kw["no_proxy"] = o["nop"]
+    if o["uas"]:
+        kw["uas"] = o["uas"]
+        kw["ua_rotate"] = o["urot"]
+    with Client(proto=o["proto"], verify=o["verify"], ca=o["ca"], tmo=o["tmo"], follow=o["follow"], guard=InfGuard(blk_priv=not o["priv"]), **kw) as c:
+        for i in range(o["n"]):
+            r = c.req(mth, o["url"], hdrs=o["hdrs"], body=body, json=jb)
+            if o["v"]:
+                for h in r.hist:
+                    sys.stderr.write("< %d %s -> %s\n" % (h.status, h.proto, inf_safe(h.hdrs.get("location", ""))))
+                sys.stderr.write("< #%d %s %d  %.0f ms  %d bytes  proxy=%s  ua=%s\n" % (i + 1, r.proto, r.status, r.elapsed * 1000, len(r.body), r.proxy or "-", inf_safe(r.ua or "-")))
     out = sys.stdout.buffer
     if o["inc"] or o["head"]:
         ln = ["%s %d" % (r.proto.upper(), r.status)]

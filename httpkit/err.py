@@ -30,6 +30,10 @@ class ClientError(HttpkitError):
     pass
 
 
+class ProxyError(ConnError):
+    pass
+
+
 class HpackError(HttpkitError):
     pass
 
