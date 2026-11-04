@@ -33,7 +33,17 @@ class Tgt:
                 pass
 
         self.hits = 0
-        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.conns = 0
+
+        class S(ThreadingHTTPServer):
+            daemon_threads = True
+
+            def get_request(self):
+                r = super().get_request()
+                outer.conns += 1
+                return r
+
+        self.srv = S(("127.0.0.1", 0), H)
         self.port = self.srv.server_address[1]
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
 

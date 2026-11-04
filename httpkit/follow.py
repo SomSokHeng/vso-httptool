@@ -37,10 +37,8 @@ def plan(req, resp, guard, seen, max_redirs, hop):
     guard.chk_redir(req.url, dst)
     mth = next_mth(req.mth, resp.status)
     body = req.body if mth == req.mth else b""
-    if mth == req.mth and resp.status in (307, 308) and req.body is None:
-        raise ClientError("cannot replay body")
     h = Hdrs()
-    drop = {"host", "content-length", "transfer-encoding", "cookie"}
+    drop = {"host", "content-length", "transfer-encoding"}
     if mth != req.mth:
         drop |= {"content-type", "content-encoding", "content-language", "content-location"}
     xo = dst.origin != req.url.origin

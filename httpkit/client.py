@@ -42,7 +42,7 @@ def h3_ok():
 class Client:
     def __init__(self, proto="auto", verify=True, ca=None, tmo=30.0, follow=True, jar=True, hdrs=None, lim=None, guard=None, ua=VSO_UA, h3=True,
                  proxy=None, proxies=None, rotate="round-robin", no_proxy=None, pverify=None, pca=None,
-                 uas=None, ua_rotate="round-robin", max_pool=64, verbose=False):
+                 uas=None, ua_rotate="round-robin", max_pool=64, max_idle=4, verbose=False):
         _vso.inf_warn()
         if proto not in ("auto", "h1", "h2", "h3"):
             raise ClientError("proto must be auto, h1, h2 or h3")
@@ -60,6 +60,7 @@ class Client:
         self.pverify = pverify
         self.pca = pca
         self.max_pool = max_pool
+        self.max_idle = max(1, max_idle)
         self.penv = proxy == "env"
         raw = {}
         if proxy is not None and not self.penv:
@@ -88,6 +89,7 @@ class Client:
         else:
             self.up = UaPool(uas, ua_rotate).pick
         self.pool = {}
+        self.idle = {}
         self.alt = {}
         self.bad = {}
         self.lk = threading.RLock()
@@ -101,8 +103,9 @@ class Client:
 
     def close(self):
         with self.lk:
-            cs = list(self.pool.values())
+            cs = list(self.pool.values()) + [x for v in self.idle.values() for x in v]
             self.pool.clear()
+            self.idle.clear()
         for c in cs:
             try:
                 c.close()
@@ -113,6 +116,9 @@ class Client:
         with self.lk:
             if self.pool.get(key) is c:
                 del self.pool[key]
+            lst = self.idle.get(key)
+            if lst and c in lst:
+                lst.remove(c)
         try:
             c.close()
         except Exception:
@@ -124,11 +130,24 @@ class Client:
     def alt_for(self, u):
         if self.proto != "auto" or not self.h3 or u.scheme != "https" or self.uses_px():
             return None
-        a = self.alt.get(u.origin)
         now = time.monotonic()
-        if not a or a[0] < now or self.bad.get(u.origin, 0) > now:
-            return None
-        return a[1]
+        with self.lk:
+            a = self.alt.get(u.origin)
+            if not a or a[0] < now or self.bad.get(u.origin, 0) > now:
+                return None
+            return a[1]
+
+    def mark_bad(self, origin, secs):
+        with self.lk:
+            self.bad[origin] = time.monotonic() + secs
+
+    def set_alt(self, origin, ttl, port):
+        with self.lk:
+            self.alt[origin] = (time.monotonic() + ttl, port)
+
+    def clr_alt(self, origin):
+        with self.lk:
+            self.alt.pop(origin, None)
 
     def open_conn(self, u, px=None):
         tmo = self.tmo
@@ -144,12 +163,12 @@ class Client:
                     note("h3", "HTTP/3 unavailable: %s" % e, True)
                     if self.proto == "h3":
                         raise ClientError("HTTP/3 needs a working 'cryptography' install: %s" % e) from None
-                    self.bad[u.origin] = time.monotonic() + 3600
+                    self.mark_bad(u.origin, 3600)
                 except Exception as e:
                     note("h3", "HTTP/3 failed: %s; falling back to TCP" % e, True)
                     if self.proto == "h3":
                         raise
-                    self.bad[u.origin] = time.monotonic() + 300
+                    self.mark_bad(u.origin, 300)
             alpn = ["http/1.1"] if self.proto == "h1" else ["h2", "http/1.1"]
             c = Conn.open(u, self.guard, tmo, self.verify, self.ca, alpn, px, self.pverify, self.pca, force)
             if c.alpn == "h2":
@@ -175,8 +194,16 @@ class Client:
     def cap(self):
         vic = []
         with self.lk:
-            while len(self.pool) > self.max_pool:
-                vic.append(self.pool.pop(next(iter(self.pool))))
+            while len(self.pool) + sum(len(v) for v in self.idle.values()) > self.max_pool:
+                if self.idle:
+                    k = next(iter(self.idle))
+                    vic.append(self.idle[k].pop(0))
+                    if not self.idle[k]:
+                        del self.idle[k]
+                elif self.pool:
+                    vic.append(self.pool.pop(next(iter(self.pool))))
+                else:
+                    break
         for c in vic:
             self.retire(c)
 
@@ -195,7 +222,7 @@ class Client:
                 from .h3 import open_h3
                 c = open_h3(u, port, self.guard, self.tmo, self.verify, self.ca, self.lim)
             except Exception:
-                self.bad[u.origin] = time.monotonic() + 300
+                self.mark_bad(u.origin, 300)
                 return None
             with self.lk:
                 old = self.pool.get(key)
@@ -212,24 +239,30 @@ class Client:
             n = self.try_h3(u, key)
             if n is not None:
                 return n, False
+        dead = []
         with self.lk:
             c = self.pool.get(key)
             if c is not None:
-                if isinstance(c, H1Conn):
-                    del self.pool[key]
-                    if c.alive():
-                        return c, True
-                    c.close()
-                elif c.alive():
+                if c.alive():
                     return c, True
-                else:
-                    del self.pool[key]
-                    c.close()
+                del self.pool[key]
+                dead.append(c)
+            lst = self.idle.get(key)
+            while lst:
+                x = lst.pop()
+                if x.alive():
+                    if not lst:
+                        del self.idle[key]
+                    return x, True
+                dead.append(x)
+            self.idle.pop(key, None)
+        for x in dead:
+            x.close()
         c = self.open_conn(u, px)
         if not isinstance(c, H1Conn):
             with self.lk:
                 old = self.pool.get(key)
-                if old is not None and not isinstance(old, H1Conn) and old.alive():
+                if old is not None and old.alive():
                     keep = old
                 else:
                     self.pool[key] = c
@@ -241,16 +274,20 @@ class Client:
         return c, False
 
     def give_back(self, c, key):
-        if isinstance(c, H1Conn):
-            if c.alive():
-                with self.lk:
-                    old = self.pool.get(key)
-                    self.pool[key] = c
-                if old is not None and old is not c:
-                    old.close()
-                self.cap()
-            else:
-                c.close()
+        if not isinstance(c, H1Conn):
+            return
+        if not c.alive():
+            c.close()
+            return
+        vic = []
+        with self.lk:
+            lst = self.idle.setdefault(key, [])
+            lst.append(c)
+            while len(lst) > self.max_idle:
+                vic.append(lst.pop(0))
+        for x in vic:
+            x.close()
+        self.cap()
 
     def prep(self, req, px=None):
         h = req.hdrs.copy()
@@ -358,12 +395,12 @@ class Client:
         if self.proto == "auto" and self.h3 and u.scheme == "https" and res.proto != "h3" and not self.uses_px():
             for v in res.hdrs.get_all("alt-svc"):
                 if v.strip() == "clear":
-                    self.alt.pop(u.origin, None)
+                    self.clr_alt(u.origin)
                     continue
                 m = ALT.search(v)
                 if m:
                     if h3_ok():
-                        self.alt[u.origin] = (time.monotonic() + int(m.group(2) or 86400), int(m.group(1)))
+                        self.set_alt(u.origin, int(m.group(2) or 86400), int(m.group(1)))
                         note("alt-svc", "server offers h3 on port %s, next requests will try it" % m.group(1))
                     else:
                         note("note", "server offers h3 but HTTP/3 is unavailable here (cryptography missing or broken)")

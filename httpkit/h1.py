@@ -1,4 +1,5 @@
 import re
+import select
 import time
 
 from .err import ConnError, SecError, BodyError
@@ -187,9 +188,13 @@ class H1Conn:
         self.n = 0
 
     def alive(self):
-        if not self.ok:
+        if not self.ok or self.rd.b:
             return False
-        return not self.rd.b
+        try:
+            r, _, _ = select.select([self.c.sock], [], [], 0)
+        except (OSError, ValueError):
+            return False
+        return not r
 
     def req(self, req):
         t_send = time.monotonic()

@@ -23,8 +23,29 @@ vso_lim = Lim()
 inf_priv_nets = tuple(ipaddress.ip_network(n) for n in (
     "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
     "172.16.0.0/12", "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15",
-    "224.0.0.0/4", "240.0.0.0/4", "::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8",
+    "224.0.0.0/4", "240.0.0.0/4", "::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8", "64:ff9b:1::/48", "100::/64", "2001:db8::/32",
 ))
+
+
+def chk_ip(ip, d=0):
+    if d > 2:
+        return True
+    if ip.version == 6:
+        m = ip.ipv4_mapped
+        if m:
+            return chk_ip(m, d + 1)
+        sf = ip.sixtofour
+        if sf:
+            return chk_ip(sf, d + 1)
+        t = ip.teredo
+        if t:
+            return chk_ip(t[0], d + 1) or chk_ip(t[1], d + 1)
+        pk = ip.packed
+        if pk[:12] == bytes.fromhex("0064ff9b0000000000000000"):
+            return chk_ip(ipaddress.IPv4Address(pk[12:]), d + 1)
+        if 1 < int(ip) < (1 << 32):
+            return chk_ip(ipaddress.IPv4Address(int(ip)), d + 1)
+    return (not ip.is_global) or ip.is_multicast or ip.is_reserved or ip.is_unspecified or ip.is_loopback or ip.is_link_local or any(ip in n for n in inf_priv_nets)
 
 
 def is_priv(addr):
@@ -32,9 +53,7 @@ def is_priv(addr):
         ip = ipaddress.ip_address(addr.split("%")[0])
     except ValueError:
         return True
-    if getattr(ip, "ipv4_mapped", None):
-        ip = ip.ipv4_mapped
-    return any(ip in n for n in inf_priv_nets)
+    return chk_ip(ip)
 
 
 class InfGuard:
@@ -62,9 +81,9 @@ class InfGuard:
                 out.append((fam, sa[0]))
         if not out:
             raise SecError("no addresses for %s" % host)
-        if len(self.cache) > 256:
-            self.cache.clear()
         self.cache[k] = (now, out)
+        while len(self.cache) > 256:
+            self.cache.pop(next(iter(self.cache)))
         return out
 
     def src_priv(self, host, port):

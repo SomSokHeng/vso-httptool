@@ -114,7 +114,7 @@ CLI: `-v` streams every step and ends with a problem summary, `-fb` prints the f
 
 | module | role |
 |---|---|
-| `client.py` | pooling, protocol selection, Alt-Svc, cookies, redirects, retries |
+| `client.py` | pooling (h2 and h3: one multiplexed connection per origin and proxy; h1: up to `max_idle=4` idle connections), protocol selection, Alt-Svc, cookies, redirects, retries |
 | `h1.py` `body.py` | HTTP/1.1 wire format, chunked, content-encoding with bomb limits |
 | `h2.py` `hpack.py` | HTTP/2 multiplexed client, flow control, full HPACK |
 | `quic.py` `tls13.py` | QUIC v1 transport (RFC 9000/9001/9002) and TLS 1.3 client handshake |
@@ -129,8 +129,8 @@ CLI: `-v` streams every step and ends with a problem summary, `-fb` prints the f
 
 - Header names and values are validated on every add. CR, LF and NUL are rejected, which blocks header injection and response splitting.
 - HTTP/1.1 parsing rejects `Content-Length` with `Transfer-Encoding`, conflicting or malformed `Content-Length`, obfuscated or stacked transfer-codings, obs-fold and bare control characters. This closes the usual request-smuggling vectors.
-- DNS is resolved once and the connection is pinned to that IP.
-- Redirects cannot downgrade https to http or change scheme. They cannot move from a public host into private, loopback or link-local space, which blocks redirect-based SSRF. Credentials and cookies are stripped on cross-origin hops, with loop detection and a hop limit.
+- Name lookups are cached for 30 seconds (`InfGuard`, 256 entries, oldest evicted first) and connections go to the cached IP, so the redirect check and the connection see the same answer. A pooled connection keeps its IP, and a new connection after the cache expires resolves again.
+- Redirects cannot downgrade https to http or change scheme. They cannot move from a public host into private, loopback or link-local space, which blocks redirect-based SSRF. Credentials and cookies are stripped on cross-origin hops, with loop detection and a hop limit. Private ranges include NAT64, 6to4, Teredo and IPv4-compatible addresses, which are judged by the IPv4 address inside them, plus documentation and shared ranges.
 - Certificates and hostnames are verified by default on all three protocols. `verify=False` is explicit.
 - Decompression has a size cap, a ratio cap and a layer cap.
 - HTTP/2: PUSH_PROMISE is refused, control-frame floods, CONTINUATION floods and HPACK bombs are bounded, window overflows are enforced, and response headers are validated (pseudo-header order, uppercase names, connection-specific headers, content-length vs received bytes).
@@ -153,7 +153,8 @@ Not implemented:
 - QPACK dynamic table: capacity is advertised as 0, so servers send literals and static references only.
 - 0-RTT, session resumption, connection migration, HelloRetryRequest (x25519 only), server push, client certificates.
 - QUIC congestion control. The client sends small requests and relies on flow control and the server's pacing.
-- Certificate verification uses `cryptography`'s WebPKI verifier, so private CAs passed via `ca=` need a normal leaf profile (SAN, Authority Key Identifier).
+- `ca=` replaces the system trust store on all three protocols, it does not add to it.
+- Certificate verification on HTTP/3 uses `cryptography`'s WebPKI verifier, so private CAs passed via `ca=` need a normal leaf profile (SAN, Authority Key Identifier).
 
 ```
 python -m unittest discover -s tests
