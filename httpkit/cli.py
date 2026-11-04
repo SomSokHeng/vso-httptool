@@ -5,6 +5,7 @@ import sys
 from . import VSO_NOTICE, VSO_VER, _vso
 from .client import Client
 from .err import HttpkitError
+from .feedback import fb_err, fb_json, fb_res, fb_text
 from .proxy import load_list
 from .tls import fmt_insp, insp
 from .ua import parse_ua
@@ -31,6 +32,9 @@ options:
   -t SEC          timeout (default 30)
   --priv          allow redirects into private address space
   --proxy URL     proxy: http, https, socks4, socks4a, socks5, socks5h (repeatable)
+                  also host:port, host:port:user:pass, user:pass@host:port
+  --proxy-http U  proxy used only for http:// targets (repeatable)
+  --proxy-https U proxy used only for https:// targets (repeatable)
   --proxy-file F  read proxies from a file, one per line
   --rotate MODE   round-robin (default), random or sticky
   --proxy-env     use http_proxy / https_proxy / all_proxy / no_proxy
@@ -39,7 +43,9 @@ options:
   --ua-file F     read user-agents from a file, one per line
   --ua-rotate M   round-robin (default), random or sticky
   -n COUNT        repeat the request COUNT times
-  -v              print summary to stderr
+  -v              verbose: every step and every problem, live on stderr
+  -fb             feedback report on stderr after each result or failure
+  --feedback-json same report as JSON
 """
 
 
@@ -48,7 +54,7 @@ def inf_safe(s):
 
 
 def parse_args(av):
-    o = {"mth": None, "hdrs": [], "data": None, "json": None, "proto": "auto", "follow": False, "inc": False, "head": False, "verify": True, "ca": None, "out": None, "tmo": 30.0, "priv": False, "v": False, "url": None, "px": [], "rot": "round-robin", "penv": False, "nop": None, "uas": [], "urot": "round-robin", "n": 1}
+    o = {"mth": None, "hdrs": [], "data": None, "json": None, "proto": "auto", "follow": False, "inc": False, "head": False, "verify": True, "ca": None, "out": None, "tmo": 30.0, "priv": False, "v": False, "url": None, "px": [], "rot": "round-robin", "penv": False, "nop": None, "uas": [], "urot": "round-robin", "n": 1, "fb": False, "fbj": False, "pxh": [], "pxs": []}
     i = 0
     while i < len(av):
         a = av[i]
@@ -90,6 +96,14 @@ def parse_args(av):
             o["priv"] = True
         elif a == "--proxy":
             o["px"].append(nxt())
+        elif a == "--proxy-http":
+            o["pxh"].append(nxt())
+        elif a == "--proxy-https":
+            o["pxs"].append(nxt())
+        elif a == "-fb" or a == "--feedback":
+            o["fb"] = True
+        elif a == "--feedback-json":
+            o["fbj"] = True
         elif a == "--proxy-file":
             o["px"] += load_list(nxt())
         elif a == "--rotate":
@@ -133,6 +147,17 @@ def rd_data(d):
     return d.encode("utf-8")
 
 
+def emit_fb(fb, o):
+    sys.stderr.write(inf_safe(fb_json(fb) if o["fbj"] else fb_text(fb)) + "\n")
+
+
+def emit_err(e, o):
+    if o["v"] or o["fb"] or o["fbj"]:
+        emit_fb(fb_err(e), o)
+    else:
+        sys.stderr.write("httpkit: %s: %s\n  (re-run with -v for every step, -fb for feedback)\n" % (type(e).__name__, inf_safe(str(e))))
+
+
 def do_req(o):
     if not o["url"]:
         sys.stdout.write(USG)
@@ -142,7 +167,10 @@ def do_req(o):
     mth = "HEAD" if o["head"] else (o["mth"] or ("POST" if body is not None or o["json"] else "GET"))
     jb = json.loads(o["json"]) if o["json"] is not None else None
     kw = {}
-    if o["px"]:
+    if o["pxh"] or o["pxs"]:
+        kw["proxies"] = {k: v for k, v in (("http", o["pxh"]), ("https", o["pxs"]), ("all", o["px"])) if v}
+        kw["rotate"] = o["rot"]
+    elif o["px"]:
         kw["proxies"] = o["px"]
         kw["rotate"] = o["rot"]
     elif o["penv"]:
@@ -152,13 +180,30 @@ def do_req(o):
     if o["uas"]:
         kw["uas"] = o["uas"]
         kw["ua_rotate"] = o["urot"]
-    with Client(proto=o["proto"], verify=o["verify"], ca=o["ca"], tmo=o["tmo"], follow=o["follow"], guard=InfGuard(blk_priv=not o["priv"]), **kw) as c:
+    fails = 0
+    last = None
+    probs = []
+    with Client(proto=o["proto"], verify=o["verify"], ca=o["ca"], tmo=o["tmo"], follow=o["follow"], guard=InfGuard(blk_priv=not o["priv"]), verbose=o["v"], **kw) as c:
         for i in range(o["n"]):
-            r = c.req(mth, o["url"], hdrs=o["hdrs"], body=body, json=jb)
-            if o["v"]:
-                for h in r.hist:
-                    sys.stderr.write("< %d %s -> %s\n" % (h.status, h.proto, inf_safe(h.hdrs.get("location", ""))))
-                sys.stderr.write("< #%d %s %d  %.0f ms  %d bytes  proxy=%s  ua=%s\n" % (i + 1, r.proto, r.status, r.elapsed * 1000, len(r.body), r.proxy or "-", inf_safe(r.ua or "-")))
+            try:
+                r = c.req(mth, o["url"], hdrs=o["hdrs"], body=body, json=jb)
+            except (HttpkitError, OSError) as e:
+                fails += 1
+                tr = getattr(e, "vso_trace", None)
+                probs += [x["msg"] for x in tr.prob if x["kind"] != "error"] if tr else [str(e)]
+                emit_err(e, o)
+                continue
+            last = r
+            probs += [x["msg"] for x in r.trace.prob]
+            if o["fb"] or o["fbj"]:
+                emit_fb(fb_res(r), o)
+    if o["v"] and probs:
+        sys.stderr.write("== problems (%d)\n" % len(probs))
+        for m in probs:
+            sys.stderr.write("  ! %s\n" % inf_safe(m))
+    if last is None:
+        return 1
+    r = last
     out = sys.stdout.buffer
     if o["inc"] or o["head"]:
         ln = ["%s %d" % (r.proto.upper(), r.status)]
@@ -170,6 +215,8 @@ def do_req(o):
     elif not o["head"]:
         out.write(CTLB.sub(b"?", r.body) if sys.stdout.isatty() else r.body)
     out.flush()
+    if fails:
+        return 1
     return 0 if r.status < 400 else 22
 
 

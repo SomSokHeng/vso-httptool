@@ -102,6 +102,7 @@ class Strm:
         self.upd = 0
         self.rst = False
         self.sent_end = False
+        self.t_hdr = None
 
 
 class H2Conn:
@@ -388,6 +389,7 @@ class H2Conn:
                 s.status = st
                 s.hdrs = h
                 s.got_final = True
+                s.t_hdr = time.monotonic()
                 cl = h.get_all("content-length")
                 if cl:
                     v = {x.strip() for x in cl}
@@ -527,6 +529,7 @@ class H2Conn:
         tmo = tmo or self.tmo
         hl = req_hl(req)
         body = req.body or b""
+        t_send = time.monotonic()
         end = time.monotonic() + tmo
         with self.cv:
             while True:
@@ -563,6 +566,8 @@ class H2Conn:
             raise s.err
         r = Resp(s.status, s.hdrs, bytes(s.body), "HTTP/2", "", req.url, "h2")
         r.trailers = s.trl
+        r.t_send = t_send
+        r.t_hdr = s.t_hdr
         return r
 
     def rst_local(self, s):

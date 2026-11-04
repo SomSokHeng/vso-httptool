@@ -39,6 +39,7 @@ class R:
         self.cl = None
         self.rx = 0
         self.done = False
+        self.t_hdr = None
 
 
 class H3Conn:
@@ -261,6 +262,7 @@ class H3Conn:
                 r.status = st
                 r.hdrs = h
                 r.st = 1
+                r.t_hdr = time.monotonic()
                 cl = h.get_all("content-length")
                 if cl:
                     v = {x.strip() for x in cl}
@@ -297,6 +299,7 @@ class H3Conn:
             hl.append(("content-length", str(len(body))))
         elif not body and req.mth in ("POST", "PUT", "PATCH") and not has_cl:
             hl.append(("content-length", "0"))
+        t_send = time.monotonic()
         data = frm(F_HDRS, qpack.enc(hl))
         if body:
             data += frm(F_DATA, body)
@@ -332,6 +335,8 @@ class H3Conn:
         res = Resp(r.status, r.hdrs, bytes(r.body), "HTTP/3", "", req.url, "h3")
         if r.trl is not None:
             res.trailers = r.trl
+        res.t_send = t_send
+        res.t_hdr = r.t_hdr
         return res
 
     def close(self):

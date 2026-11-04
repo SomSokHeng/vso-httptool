@@ -29,6 +29,14 @@ class Resp:
         self.elapsed = 0.0
         self.proxy = None
         self.ua = None
+        self.trace = None
+        self.t_send = None
+        self.t_hdr = None
+        self.tm = {}
+        self.reused = False
+        self.tls = None
+        self.wire = None
+        self.enc_in = None
 
     @property
     def ok(self):
@@ -51,6 +59,11 @@ class Resp:
 
     def json(self):
         return _json.loads(self.body.decode("utf-8"))
+
+    def feedback(self, text=False, events=False):
+        from .feedback import fb_res, fb_text
+        fb = fb_res(self)
+        return fb_text(fb, events) if text else fb
 
     def raise_for_status(self):
         if self.status >= 400:

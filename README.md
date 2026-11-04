@@ -67,11 +67,14 @@ with Client(proxies=["http://u:p@10.0.0.1:8080", "socks5h://127.0.0.1:9050"],
 | option | does |
 |---|---|
 | `proxy="URL"` / `proxies=[...]` | one proxy or a list; `proxy="env"` reads `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy` |
+| `proxies={"http": ..., "https": ..., "all": ...}` | different proxies (or rotating lists) for `http://` and `https://` targets |
 | `rotate=` | `round-robin` (default), `random` or `sticky` (one proxy per origin) |
 | `no_proxy="a.com,.b.com,10.0.0.0/8"` | hosts that skip the proxy |
 | `uas=[...]` or `uas=callable` | user-agent list or your own function; `ua_rotate=` takes the same three modes |
 | `req(..., proxy="URL")` or `proxy="direct"` | override for one request |
 | an explicit `User-Agent` header | wins over rotation |
+
+Accepted forms: `http://user:pass@host:port`, `host:port`, `host:port:user:pass` and `user:pass@host:port`.
 
 Proxy types: `http`, `https` (TLS to the proxy, including TLS inside TLS for https targets), `socks4`, `socks4a`, `socks5`, `socks5h`, each with optional `user:pass@`. `load_list(path)` reads one entry per line.
 
@@ -85,6 +88,28 @@ Notes:
 
 CLI: `python -m httpkit -v -n 5 --proxy-file proxies.txt --rotate random --ua-file agents.txt https://example.com`
 
+## Verbose, problems and feedback
+
+```python
+from httpkit import Client, fb_err, fb_text
+
+with Client(verbose=True) as c:
+    try:
+        r = c.get("https://example.com")
+        print(r.feedback(text=True))
+        data = r.feedback()
+    except Exception as e:
+        print(fb_text(fb_err(e)))
+```
+
+- `verbose=True` prints every step live to stderr: DNS, TCP, proxy handshake, TLS, connection reuse, request, response, redirects, retries, cookies, decoding. `verbose=fn` sends each event dict to your function instead.
+- `r.feedback()` returns a report dict (`text=True` gives a printable report): timing (dns, tcp, proxy, tls, ttfb, total), TLS version, cipher and certificate days left, body size and decoding, redirects, problems and notes.
+- A problem is something that went wrong or looks wrong: 4xx/5xx and 407/429, a retried stale connection, slow first byte, an expiring certificate, disabled verification. A note is an observation about the server, such as a missing HSTS header, a version in the Server banner, or cookies without Secure/HttpOnly/SameSite.
+- Failures carry the same trace: `fb_err(exc)` gives the stage (`dns`, `tcp`, `proxy`, `tls`, `http2`, ...), the cause chain and a hint. `exc.vso_trace` and `r.trace` hold the raw events.
+- This only reports. It never skips a proxy, retries elsewhere or changes behavior.
+
+CLI: `-v` streams every step and ends with a problem summary, `-fb` prints the feedback report after each result or failure, and `--feedback-json` prints it as JSON. All of it goes to stderr, so the body on stdout stays clean. With `-n`, a failed request does not stop the rest.
+
 ## Layout
 
 | module | role |
@@ -95,6 +120,7 @@ CLI: `python -m httpkit -v -n 5 --proxy-file proxies.txt --rotate random --ua-fi
 | `quic.py` `tls13.py` | QUIC v1 transport (RFC 9000/9001/9002) and TLS 1.3 client handshake |
 | `h3.py` `qpack.py` | HTTP/3 (RFC 9114) and QPACK static-table codec |
 | `sec.py` `follow.py` | limits, SSRF guard, redirect policy |
+| `trace.py` `feedback.py` | step events, timings, problems, notes, hints |
 | `proxy.py` | proxy parsing, rotation, HTTP CONNECT, SOCKS4/4a/5/5h, TLS-in-TLS |
 | `cookie.py` `url.py` `hdr.py` `msg.py` `ua.py` | supporting pieces |
 | `tls.py` `conn.py` | TCP/TLS connect and TLS session inspection |

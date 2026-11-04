@@ -252,7 +252,7 @@ class FlowT(unittest.TestCase):
         px = Px("http")
         r = subprocess.run([sys.executable, "-m", "httpkit", "-v", "-n", "2", "--proxy", px.url(), "--ua", "X/1", "--ua", "Y/2", self.t.url()], cwd=ROOT, env=dict(os.environ, PYTHONPATH=ROOT), capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("proxy=" + px.url(), r.stderr)
+        self.assertIn("via " + px.url(), r.stderr)
         self.assertIn("ua=X/1", r.stderr)
         self.assertIn("ua=Y/2", r.stderr)
         px.close()

@@ -8,9 +8,10 @@ import ssl
 import struct
 import threading
 import time
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from .err import ProxyError, SecError, TlsError
+from .trace import note
 
 VSO_PXS = ("http", "https", "socks4", "socks4a", "socks5", "socks5h")
 DEFP = {"http": 8080, "https": 8080, "socks4": 1080, "socks4a": 1080, "socks5": 1080, "socks5h": 1080}
@@ -48,13 +49,23 @@ class Proxy:
         return "Proxy(%s)" % self.safe
 
 
+def norm(s):
+    if "://" in s or "[" in s:
+        return s
+    parts = s.split(":", 3)
+    if len(parts) == 4 and parts[1].isdigit() and "@" not in parts[0]:
+        return "http://%s:%s@%s:%s" % (quote(parts[2], safe=""), quote(parts[3], safe=""), parts[0], parts[1])
+    return "http://" + s
+
+
 def parse_proxy(s):
     if isinstance(s, Proxy):
         return s
+    if isinstance(s, str):
+        s = s.strip()
     if not isinstance(s, str) or not s or len(s) > 2048 or any(c in BADCH for c in s):
         raise ProxyError("invalid proxy string")
-    if "://" not in s:
-        s = "http://" + s
+    s = norm(s)
     p = urlsplit(s)
     sch = p.scheme.lower()
     if sch not in VSO_PXS:
@@ -179,6 +190,7 @@ def tcp_to(px, guard, tmo):
         try:
             s.settimeout(tmo)
             s.connect((addr, px.port))
+            note("proxy", "connected to proxy %s:%d" % (addr, px.port))
             try:
                 s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             except OSError:
@@ -187,6 +199,7 @@ def tcp_to(px, guard, tmo):
         except OSError as e:
             last = e
             s.close()
+    note("proxy", "cannot connect to proxy %s: %s" % (px.safe, last), True)
     raise ProxyError("cannot connect to proxy %s: %s" % (px.safe, last))
 
 
@@ -210,6 +223,7 @@ def http_connect(s, px, host, port):
     if len(parts) < 2 or not parts[0].startswith("HTTP/1.") or not parts[1].isdigit():
         raise ProxyError("malformed proxy CONNECT response")
     st = int(parts[1])
+    note("proxy", "CONNECT %s -> %d %s" % (t, st, parts[2] if len(parts) > 2 else ""), st >= 300)
     if 200 <= st < 300:
         return
     if st == 407:
@@ -248,6 +262,7 @@ def s4(s, px, host, port, guard):
     uid = (px.usr or "").encode("utf-8") + b"\x00"
     s.sendall(b"\x04\x01" + struct.pack(">H", port) + ab + uid + tail)
     r = rd_exact(s, 8)
+    note("proxy", "socks4 reply 0x%02x" % r[1], r[1] != 0x5A)
     if r[0] != 0 or r[1] != 0x5A:
         raise ProxyError("socks4 proxy %s: %s" % (px.safe, S4ERR.get(r[1], "error 0x%02x" % r[1])))
 
@@ -290,6 +305,7 @@ def s5(s, px, host, port, guard):
     h = rd_exact(s, 4)
     if h[0] != 5:
         raise ProxyError("bad socks5 reply")
+    note("proxy", "socks5 reply code %d" % h[1], h[1] != 0)
     if h[1] != 0:
         raise ProxyError("socks5 proxy %s: %s" % (px.safe, S5ERR.get(h[1], "error %d" % h[1])))
     at = h[3]
@@ -319,11 +335,13 @@ def open_tunnel(px, url, guard, tmo, verify=True, ca=None, force=False):
         else:
             s5(s, px, url.host, url.port, guard)
         return s, False
-    except ProxyError:
+    except ProxyError as e:
         s.close()
+        note("proxy", str(e), True)
         raise
     except (OSError, ssl.SSLError) as e:
         s.close()
+        note("proxy", "proxy %s failed: %s" % (px.safe, e), True)
         raise ProxyError("proxy %s failed: %s" % (px.safe, e)) from None
 
 

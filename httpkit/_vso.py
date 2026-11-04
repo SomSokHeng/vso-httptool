@@ -9,7 +9,7 @@ VSO_LICENSE = "MIT"
 VSO_REPO = "https://github.com/SomSokHeng/vso-httptool"
 VSO_NOTICE = "vso-httptool by %s | License: %s | %s" % (VSO_AUTHOR, VSO_LICENSE, VSO_REPO)
 VSO_WARN = "WARNING: use only on systems you own or are authorized to test. Do not use for illegal activity."
-VSO_ROOT = "0a2529898b7d72e25bd9cceeff083f92c21dfac90f1b33574ab288abe4c5d0f8"
+VSO_ROOT = "21863d314d41fb8ec38bc1601b37a464891557949858afcfbca12d3789754abf"
 
 inf_done = [False]
 

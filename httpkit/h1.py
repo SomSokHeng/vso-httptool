@@ -1,4 +1,5 @@
 import re
+import time
 
 from .err import ConnError, SecError, BodyError
 from .hdr import Hdrs, parse_hdrs, TOK
@@ -140,6 +141,7 @@ def rd_chunked(rd, mx, lim):
 def rd_resp(rd, mth, lim):
     while True:
         head = rd.until(b"\r\n\r\n", lim.max_hdr_b)
+        t_hdr = time.monotonic()
         sl, _, hb = head.partition(b"\r\n")
         m = STAT.match(sl)
         if not m:
@@ -152,6 +154,7 @@ def rd_resp(rd, mth, lim):
         break
     h = parse_hdrs(hb, lim.max_hdrs, lim.max_hdr_b)
     r = Resp(st, h, b"", ver, rs, proto="http/1.1")
+    r.t_hdr = t_hdr
     keep = ver == "HTTP/1.1"
     cn = [x.strip().lower() for v in h.get_all("connection") for x in v.split(",")]
     if "close" in cn:
@@ -189,10 +192,12 @@ class H1Conn:
         return not self.rd.b
 
     def req(self, req):
+        t_send = time.monotonic()
         self.c.send(ser_req(req, abs_form=getattr(self.c, "abs_form", False)))
         self.n += 1
         try:
             r, keep = rd_resp(self.rd, req.mth, self.lim)
+            r.t_send = t_send
         except Exception:
             self.ok = False
             raise
