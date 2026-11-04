@@ -117,7 +117,7 @@ CLI: `-v` streams every step and ends with a problem summary, `-fb` prints the f
 | `client.py` | pooling (h2 and h3: one multiplexed connection per origin and proxy; h1: up to `max_idle=4` idle connections), protocol selection, Alt-Svc, cookies, redirects, retries |
 | `h1.py` `body.py` | HTTP/1.1 wire format, chunked, content-encoding with bomb limits |
 | `h2.py` `hpack.py` | HTTP/2 multiplexed client, flow control, full HPACK |
-| `quic.py` `tls13.py` | QUIC v1 transport (RFC 9000/9001/9002) and TLS 1.3 client handshake |
+| `quic.py` `tls13.py` | QUIC v1 transport (RFC 9000/9001/9002, NewReno window) and TLS 1.3 client handshake (CA bundle parsed once and cached) |
 | `h3.py` `qpack.py` | HTTP/3 (RFC 9114) and QPACK static-table codec |
 | `sec.py` `follow.py` | limits, SSRF guard, redirect policy |
 | `trace.py` `feedback.py` | step events, timings, problems, notes, hints |
@@ -134,7 +134,7 @@ CLI: `-v` streams every step and ends with a problem summary, `-fb` prints the f
 - Certificates and hostnames are verified by default on all three protocols. `verify=False` is explicit.
 - Decompression has a size cap, a ratio cap and a layer cap.
 - HTTP/2: PUSH_PROMISE is refused, control-frame floods, CONTINUATION floods and HPACK bombs are bounded, window overflows are enforced, and response headers are validated (pseudo-header order, uppercase names, connection-specific headers, content-length vs received bytes).
-- QUIC and HTTP/3: flow-control violations, final-size changes, stream-limit abuse, crypto-buffer overflow, transport-parameter mismatches, and malformed or forbidden HTTP/3 frames close the connection.
+- QUIC and HTTP/3: stateless resets are recognised from the tokens the server issued, so a restarted server fails the request at once instead of after the 30 s idle timeout. Flow-control violations, final-size changes, stream-limit abuse, crypto-buffer overflow, transport-parameter mismatches, and malformed or forbidden HTTP/3 frames close the connection. More incoming unidirectional streams than the advertised 16 close the connection too.
 - The CLI escapes terminal control sequences in headers and bodies when writing to a TTY.
 
 ## Author seal and notice
@@ -145,14 +145,14 @@ The license is still MIT. MIT allows modification, so the seal is tamper-evidenc
 
 ## Status and limits
 
-Tested: 84 tests (live and QUIC tests skip themselves if `cryptography` is unusable). They cover the RFC 7541 and RFC 9001 vectors, wire-level attack cases, a malicious HTTP/2 server, and live interop against `hypercorn` (aioquic) over h1, h2 and h3. The h3 live tests include a 3 MB download, a 300 KB upload, 30 concurrent streams, Alt-Svc upgrade, and downloads that complete under 5% and 15% simulated packet loss.
+Tested: 150+ tests (live and QUIC tests skip themselves if `cryptography` is unusable). They cover the RFC 7541 and RFC 9001 vectors, wire-level attack cases, a malicious HTTP/2 server, and live interop against `hypercorn` (aioquic) over h1, h2 and h3. The h3 live tests include a 3 MB download, a 300 KB upload, 30 concurrent streams, Alt-Svc upgrade, and downloads that complete under 5% and 15% simulated packet loss.
 
 Not yet tested against large public HTTP/3 servers. Interop so far is with aioquic.
 
 Not implemented:
 - QPACK dynamic table: capacity is advertised as 0, so servers send literals and static references only.
 - 0-RTT, session resumption, connection migration, HelloRetryRequest (x25519 only), server push, client certificates.
-- QUIC congestion control. The client sends small requests and relies on flow control and the server's pacing.
+- QUIC pacing, ECN and a full persistent-congestion model. Sending is limited by a NewReno-style window instead: 10-packet initial window, slow start, congestion avoidance, halving on loss, minimum window after repeated timeouts.
 - `ca=` replaces the system trust store on all three protocols, it does not add to it.
 - Certificate verification on HTTP/3 uses `cryptography`'s WebPKI verifier, so private CAs passed via `ca=` need a normal leaf profile (SAN, Authority Key Identifier).
 

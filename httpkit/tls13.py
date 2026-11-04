@@ -4,6 +4,7 @@ import ipaddress
 import os
 import ssl
 import struct
+import threading
 import warnings
 
 from cryptography import x509
@@ -28,6 +29,9 @@ CAFILES = (
     "/data/data/com.termux/files/usr/etc/tls/cert.pem",
 )
 PEMB = b"-----BEGIN CERTIFICATE-----"
+CERT_SIGS = SIGS + (0x0401, 0x0501, 0x0601)
+_rc = {}
+_rl = threading.Lock()
 
 
 def hk_ext(h, salt, ikm):
@@ -54,7 +58,7 @@ def der_secret(h, sec, lbl, th):
     return exp_lbl(h, sec, lbl, th, hashlib.new(h).digest_size)
 
 
-def roots(ca=None):
+def bundle_certs(ca):
     paths = [ca] if ca else []
     if not ca:
         vp = ssl.get_default_verify_paths()
@@ -79,6 +83,31 @@ def roots(ca=None):
             if out:
                 return out
     raise TlsError("no CA bundle found; pass ca=<path> or verify=False")
+
+
+def trust(ca=None):
+    key = None
+    if ca:
+        try:
+            st = os.stat(ca)
+        except OSError:
+            raise TlsError("cannot read CA bundle: %s" % ca) from None
+        key = (ca, st.st_mtime_ns, st.st_size)
+    with _rl:
+        hit = _rc.get(key)
+    if hit is not None:
+        return hit
+    certs = bundle_certs(ca)
+    val = (certs, Store(certs))
+    with _rl:
+        if len(_rc) >= 4:
+            _rc.pop(next(iter(_rc)))
+        _rc[key] = val
+    return val
+
+
+def roots(ca=None):
+    return trust(ca)[0]
 
 
 def ext(t, d):
@@ -146,6 +175,7 @@ class Tls13:
         al = b"".join(bytes([len(p)]) + p for p in self.alpn)
         exts = sni + ext(10, struct.pack(">HH", 2, 0x001D))
         exts += ext(13, struct.pack(">H", 2 * len(SIGS)) + b"".join(struct.pack(">H", s) for s in SIGS))
+        exts += ext(0x32, struct.pack(">H", 2 * len(CERT_SIGS)) + b"".join(struct.pack(">H", s) for s in CERT_SIGS))
         exts += ext(43, b"\x02\x03\x04")
         exts += ext(51, struct.pack(">HHH", 36, 0x001D, 32) + ke)
         exts += ext(16, struct.pack(">H", len(al)) + al)
@@ -301,7 +331,7 @@ class Tls13:
             except ValueError:
                 sub = x509.DNSName(self.host)
             try:
-                PolicyBuilder().store(Store(roots(self.ca))).build_server_verifier(sub).verify(self.leaf, inter)
+                PolicyBuilder().store(trust(self.ca)[1]).build_server_verifier(sub).verify(self.leaf, inter)
             except TlsError:
                 raise
             except Exception as e:

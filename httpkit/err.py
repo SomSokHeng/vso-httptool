@@ -54,6 +54,10 @@ class QuicError(ConnError):
         self.code = code
 
 
+class QuicReset(QuicError):
+    pass
+
+
 class H3Error(HttpkitError):
     def __init__(self, msg, code=0x101):
         super().__init__(msg)

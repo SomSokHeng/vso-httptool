@@ -14,7 +14,7 @@ from .sec import InfGuard, Lim, vso_lim
 from .trace import Trace
 from .ua import UaPool, VSO_UA, parse_ua, ua_str
 
-VSO_VER = "1.2.1"
+VSO_VER = "1.3.0"
 __version__ = VSO_VER
 __author__ = _vso.VSO_AUTHOR
 __license__ = _vso.VSO_LICENSE

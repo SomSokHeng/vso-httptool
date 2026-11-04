@@ -1,3 +1,4 @@
+import hmac
 import os
 import socket
 import struct
@@ -7,7 +8,7 @@ import time
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
 
-from .err import QuicError, TlsError
+from .err import QuicError, QuicReset, TlsError
 from .tls13 import CS, Tls13, exp_lbl, hk_ext
 
 V1 = 1
@@ -19,6 +20,11 @@ PN_LEN = 4
 CONN_WIN = 1 << 24
 STRM_WIN = 1 << 20
 INIT_RTT = 0.25
+MAX_UNI = 16
+INIT_CWND = 10 * MTU
+MIN_CWND = 2 * MTU
+MAX_CWND = 1 << 23
+MAX_TOK = 32
 MAX_ACK_DELAY = 0.025
 T_PADDING, T_PING, T_ACK, T_ACKE, T_RESET, T_STOP, T_CRYPTO, T_TOKEN = 0, 1, 2, 3, 4, 5, 6, 7
 T_MAXDATA, T_MAXSD, T_MAXSB, T_MAXSU, T_DB, T_SDB, T_SBB, T_SBU = 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17
@@ -243,7 +249,14 @@ class QConn:
         self.max_body = max_body
         self.mbs = 0
         self.mus = 0
-        tp = tp_enc([(1, 30000), (4, CONN_WIN), (5, STRM_WIN), (6, STRM_WIN), (7, STRM_WIN), (8, 0), (9, 16), (0x0E, 4), (0x0C, b""), (0x0F, self.scid)])
+        self.cwnd = INIT_CWND
+        self.ssth = float("inf")
+        self.bif = 0
+        self.rec_t = 0.0
+        self.probe_n = 0
+        self.max_bif = 0
+        self.rtok = set()
+        tp = tp_enc([(1, 30000), (4, CONN_WIN), (5, STRM_WIN), (6, STRM_WIN), (7, STRM_WIN), (8, 0), (9, MAX_UNI), (0x0E, 4), (0x0C, b""), (0x0F, self.scid)])
         self.tls = Tls13(host, list(alpn), tp, verify, ca)
         self.th = threading.Thread(target=self.run, daemon=True)
         self.alpn = alpn
@@ -290,6 +303,8 @@ class QConn:
         if not self.retry and 0x10 in d:
             raise QuicError("unexpected retry_source_connection_id", E_TP)
         self.ptp = d
+        if len(d.get(2, b"")) == 16:
+            self.rtok.add(bytes(d[2]))
         self.smd = tp_int(d, 4, 0)
         self.mbs = tp_int(d, 8, 0)
         self.mus = tp_int(d, 9, 0)
@@ -323,7 +338,7 @@ class QConn:
                         self.dgram(d)
                         self.flush()
                     except QuicError as e:
-                        self.fail(e, True)
+                        self.fail(e, not isinstance(e, QuicReset))
                         return
                     except TlsError as e:
                         self.fail(QuicError("tls: %s" % e, 0x100), True, 0x128)
@@ -450,12 +465,22 @@ class QConn:
         sp = self.sp[2]
         p = off + 1 + len(self.scid)
         if d[off + 1:p] != self.scid or sp.rcv is None:
+            self.chk_reset(d, off)
             return len(d) - off
         r = self.unprot(sp, d, off, p, len(d), False)
         if r is None:
+            self.chk_reset(d, off)
             return len(d) - off
         self.rx(2, sp, r[0], r[1])
         return len(d) - off
+
+    def chk_reset(self, d, off):
+        if len(d) - off < 21:
+            return
+        t = bytes(d[-16:])
+        for k in self.rtok:
+            if hmac.compare_digest(k, t):
+                raise QuicReset("stateless reset received: the server no longer knows this connection (restarted?)", 0x0)
 
     def skip_long(self, d, p, ty):
         ln, p = rvi(d, p)
@@ -505,6 +530,7 @@ class QConn:
         self.token = tok
         self.rscid = bytes(sc)
         self.dcid = bytes(sc)
+        self.fly_clear(self.sp[0])
         sp = Sp()
         sp.snd, sp.rcv = init_keys(self.dcid)
         sp.cq.append((0, bytes(self.tls.msgs)))
@@ -619,6 +645,8 @@ class QConn:
                 if ln < 1 or ln > 20 or pos + ln + 16 > n:
                     raise QuicError("bad NEW_CONNECTION_ID", E_FRAME)
                 self.ncid[seq] = bytes(b[pos:pos + ln])
+                if len(self.rtok) < MAX_TOK:
+                    self.rtok.add(bytes(b[pos + ln:pos + ln + 16]))
                 pos += ln + 16
                 if len(self.ncid) > 16:
                     raise QuicError("too many connection ids", 9)
@@ -653,8 +681,8 @@ class QConn:
                 self.confirmed = True
                 self.sp[0].snd = self.sp[0].rcv = None
                 self.sp[1].snd = self.sp[1].rcv = None
-                self.sp[0].sent.clear()
-                self.sp[1].sent.clear()
+                self.fly_clear(self.sp[0])
+                self.fly_clear(self.sp[1])
             else:
                 raise QuicError("unknown frame type 0x%x" % t, E_FRAME)
         return elig
@@ -684,8 +712,8 @@ class QConn:
         if s is None:
             if sid & 3 != 3:
                 return None
-            if len(self.strms) > 64:
-                raise QuicError("too many peer streams", E_STRMLIM)
+            if (sid >> 2) >= MAX_UNI:
+                raise QuicError("peer opened more unidirectional streams than allowed", E_STRMLIM)
             s = QS(sid, 0, STRM_WIN)
             self.strms[sid] = s
         return s
@@ -767,6 +795,9 @@ class QConn:
         for lo, hi in rngs:
             for pn in [p for p in sp.sent if lo <= p <= hi]:
                 sk = sp.sent.pop(pn)
+                self.unfly(sk)
+                if sk.elig:
+                    self.cc_ack(sk)
                 if pn == lg and sk.elig:
                     got = True
                     self.rtt(now - sk.t)
@@ -777,7 +808,35 @@ class QConn:
         thr = 9.0 / 8.0 * max(self.srtt or INIT_RTT, 0.001)
         lost = [p for p, sk in sp.sent.items() if p < sp.lack - 2 or (p < sp.lack and now - sk.t > thr)]
         for p in lost:
-            self.requeue(sp, sp.sent.pop(p))
+            sk = sp.sent.pop(p)
+            self.unfly(sk)
+            if sk.elig:
+                self.cc_loss(sk, now)
+            self.requeue(sp, sk)
+
+    def unfly(self, sk):
+        if sk.elig:
+            self.bif = max(0, self.bif - sk.n)
+
+    def fly_clear(self, sp):
+        for sk in sp.sent.values():
+            self.unfly(sk)
+        sp.sent.clear()
+
+    def cc_ack(self, sk):
+        if sk.t <= self.rec_t:
+            return
+        if self.cwnd < self.ssth:
+            self.cwnd += sk.n
+        else:
+            self.cwnd += MTU * sk.n // max(self.cwnd, 1)
+        self.cwnd = min(self.cwnd, MAX_CWND)
+
+    def cc_loss(self, sk, now):
+        if sk.t > self.rec_t:
+            self.rec_t = now
+            self.ssth = max(self.cwnd // 2, MIN_CWND)
+            self.cwnd = self.ssth
 
     def rtt(self, s):
         if self.srtt is None:
@@ -824,9 +883,14 @@ class QConn:
                 due = True
                 for p, sk in sorted(old)[:2]:
                     del sp.sent[p]
+                    self.unfly(sk)
                     self.requeue(sp, sk)
         if due:
             self.pto_n += 1
+            self.probe_n = 2
+            if self.pto_n >= 3:
+                self.ssth = max(self.cwnd // 2, MIN_CWND)
+                self.cwnd = MIN_CWND
             if self.pto_n > 8:
                 self.fail(QuicError("peer unresponsive"))
                 return
@@ -898,12 +962,13 @@ class QConn:
             else:
                 sp.cq.pop(0)
         if lvl == 2:
+            can = self.bif < self.cwnd or self.probe_n > 0
             while self.ctlq and len(self.ctlq[0]) <= room - len(out):
                 c = self.ctlq.pop(0)
                 out += c
                 frs.append(("x", c))
                 elig = True
-            for sid, s in list(self.strms.items()):
+            for sid, s in (list(self.strms.items()) if can else []):
                 if s.reset and not s.retx and not s.snd:
                     continue
                 while room - len(out) > 24 and (s.retx or s.snd or (s.fin and not s.fsent)):
@@ -975,6 +1040,11 @@ class QConn:
                 out += pk
                 if frs or elig:
                     self.sp[lvl].sent[self.last_pn] = Sent(time.monotonic(), frs, elig, len(pk))
+                if elig:
+                    self.bif += len(pk)
+                    self.max_bif = max(self.max_bif, self.bif)
+                    if self.probe_n > 0:
+                        self.probe_n -= 1
             try:
                 self.sock.send(out)
             except OSError:
@@ -983,7 +1053,7 @@ class QConn:
             if any(p[0] == 1 for p in pkts) and self.sp[0].snd is not None and not getattr(self, "got_hs_tx", False):
                 self.got_hs_tx = True
                 self.sp[0].snd = self.sp[0].rcv = None
-                self.sp[0].sent.clear()
+                self.fly_clear(self.sp[0])
         self.probe = False
 
     def open_bidi(self):
