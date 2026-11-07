@@ -1,5 +1,6 @@
 import ipaddress
 import socket
+import threading
 import time
 from dataclasses import dataclass
 
@@ -62,11 +63,13 @@ class InfGuard:
         self.allow_downgrade = allow_downgrade
         self.ttl = ttl
         self.cache = {}
+        self.lk = threading.Lock()
 
     def resolve(self, host, port):
         now = time.monotonic()
         k = (host, port)
-        hit = self.cache.get(k)
+        with self.lk:
+            hit = self.cache.get(k)
         if hit and now - hit[0] < self.ttl:
             return hit[1]
         try:
@@ -81,9 +84,10 @@ class InfGuard:
                 out.append((fam, sa[0]))
         if not out:
             raise SecError("no addresses for %s" % host)
-        self.cache[k] = (now, out)
-        while len(self.cache) > 256:
-            self.cache.pop(next(iter(self.cache)))
+        with self.lk:
+            self.cache[k] = (now, out)
+            while len(self.cache) > 256:
+                self.cache.pop(next(iter(self.cache)))
         return out
 
     def src_priv(self, host, port):

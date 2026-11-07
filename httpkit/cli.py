@@ -22,7 +22,8 @@ options:
   -H 'K: V'       add header (repeatable)
   -d DATA         request body; @file reads a file, @- reads stdin
   --json JSON     send JSON body
-  --h1 --h2 --h3  force protocol (default: auto, with Alt-Svc upgrade to h3)
+  --auto          protocol auto mode: h2 or h1 by ALPN, h3 after Alt-Svc (default)
+  --h1 --h2 --h3  force protocol
   -L              follow redirects
   -i              print response headers
   -I              HEAD request
@@ -42,7 +43,12 @@ options:
   --ua STR        user-agent (repeatable)
   --ua-file F     read user-agents from a file, one per line
   --ua-rotate M   round-robin (default), random or sticky
-  -n COUNT        repeat the request COUNT times
+  -n COUNT        repeat the request COUNT times (max 1000; with --stream up to 1000000000)
+  --stream SPEED  long async request loop: slow, medium, fast or a rate in req/s (0.1-200)
+                  runs until -n, --duration or Ctrl-C; prints live stats on stderr
+  --threads N     stream concurrency, 1-50 (default by speed: slow 4, medium 16, fast 50)
+  --duration SEC  stop the stream after SEC seconds
+  --max-fail N    stop the stream after N consecutive failures (default 500, 0 = off)
   -v              verbose: every step and every problem, live on stderr
   -fb             feedback report on stderr after each result or failure
   --feedback-json same report as JSON
@@ -53,8 +59,22 @@ def inf_safe(s):
     return CTL.sub(lambda m: "\\x%02x" % ord(m.group()), s)
 
 
+def int_arg(a, v):
+    try:
+        return int(v)
+    except ValueError:
+        raise SystemExit("bad number for %s: %r" % (a, inf_safe(v))) from None
+
+
+def float_arg(a, v):
+    try:
+        return float(v)
+    except ValueError:
+        raise SystemExit("bad number for %s: %r" % (a, inf_safe(v))) from None
+
+
 def parse_args(av):
-    o = {"mth": None, "hdrs": [], "data": None, "json": None, "proto": "auto", "follow": False, "inc": False, "head": False, "verify": True, "ca": None, "out": None, "tmo": 30.0, "priv": False, "v": False, "url": None, "px": [], "rot": "round-robin", "penv": False, "nop": None, "uas": [], "urot": "round-robin", "n": 1, "fb": False, "fbj": False, "pxh": [], "pxs": []}
+    o = {"mth": None, "hdrs": [], "data": None, "json": None, "proto": "auto", "follow": False, "inc": False, "head": False, "verify": True, "ca": None, "out": None, "tmo": 30.0, "priv": False, "v": False, "url": None, "px": [], "rot": "round-robin", "penv": False, "nop": None, "uas": [], "urot": "round-robin", "n": None, "fb": False, "stream": None, "thr": None, "dur": None, "mf": 500, "fbj": False, "pxh": [], "pxs": []}
     i = 0
     while i < len(av):
         a = av[i]
@@ -78,6 +98,16 @@ def parse_args(av):
             o["json"] = nxt()
         elif a in ("--h1", "--h2", "--h3"):
             o["proto"] = a[2:]
+        elif a == "--auto":
+            o["proto"] = "auto"
+        elif a == "--stream":
+            o["stream"] = nxt()
+        elif a == "--threads":
+            o["thr"] = int_arg(a, nxt())
+        elif a == "--duration":
+            o["dur"] = float_arg(a, nxt())
+        elif a == "--max-fail":
+            o["mf"] = int_arg(a, nxt())
         elif a == "-L":
             o["follow"] = True
         elif a == "-i":
@@ -119,7 +149,7 @@ def parse_args(av):
         elif a == "--ua-rotate":
             o["urot"] = nxt()
         elif a == "-n":
-            o["n"] = max(1, min(1000, int(nxt())))
+            o["n"] = int_arg(a, nxt())
         elif a == "-v":
             o["v"] = True
         elif a in ("-h", "--help"):
@@ -158,6 +188,22 @@ def emit_err(e, o):
         sys.stderr.write("httpkit: %s: %s\n  (re-run with -v for every step, -fb for feedback)\n" % (type(e).__name__, inf_safe(str(e))))
 
 
+def do_stream(o, mth, body, jb, kw):
+    from .sec import InfGuard
+    from .stream import run_stream, stderr_line
+    if o["out"] or o["inc"] or o["head"]:
+        raise SystemExit("--stream does not combine with -o, -i or -I")
+    ca = dict(kw)
+    ca.update(proto=o["proto"], verify=o["verify"], ca=o["ca"], tmo=o["tmo"], follow=o["follow"], guard=InfGuard(blk_priv=not o["priv"]), verbose=False)
+    st = run_stream(o["url"], speed=o["stream"], threads=o["thr"], n=o["n"], dur=o["dur"], mth=mth, hdrs=o["hdrs"], body=body, json=jb,
+                    max_fail=max(0, o["mf"]), sink=stderr_line, **ca)
+    if o["fbj"]:
+        sys.stderr.write(json.dumps(st.as_dict()) + "\n")
+    else:
+        sys.stderr.write(inf_safe(st.text()) + "\n")
+    return 0 if st.ok else 1
+
+
 def do_req(o):
     if not o["url"]:
         sys.stdout.write(USG)
@@ -180,11 +226,13 @@ def do_req(o):
     if o["uas"]:
         kw["uas"] = o["uas"]
         kw["ua_rotate"] = o["urot"]
+    if o["stream"] is not None:
+        return do_stream(o, mth, body, jb, kw)
     fails = 0
     last = None
     probs = []
     with Client(proto=o["proto"], verify=o["verify"], ca=o["ca"], tmo=o["tmo"], follow=o["follow"], guard=InfGuard(blk_priv=not o["priv"]), verbose=o["v"], **kw) as c:
-        for i in range(o["n"]):
+        for i in range(max(1, min(1000, o["n"] or 1))):
             try:
                 r = c.req(mth, o["url"], hdrs=o["hdrs"], body=body, json=jb)
             except (HttpkitError, OSError) as e:
