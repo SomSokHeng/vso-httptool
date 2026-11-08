@@ -52,6 +52,46 @@ python -m httpkit tls example.com:443
 python -m httpkit ua "vso-httptool/1.0 (Linux) Mozilla/5.0"
 ```
 
+## Async and streaming
+
+```python
+import asyncio
+from httpkit import AsyncClient, InfStream
+
+async def main():
+    async with AsyncClient(workers=20, proto="auto") as ac:
+        r = await ac.get("https://example.com")
+        rs = await ac.gather(["https://example.com/%d" % i for i in range(50)], exc=True)
+        async for x in ac.imap(("https://example.com/%d" % i for i in range(1000)), win=40):
+            pass
+
+    st = await InfStream("https://example.com", speed="medium", dur=60, proto="auto").run()
+    print(st.text())
+
+asyncio.run(main())
+```
+
+`AsyncClient` is an asyncio front end over `Client`. Each call runs on a bounded worker pool (1 to 50), so h1, h2 and h3 all work, including `auto` with the Alt-Svc upgrade to h3, and no other package is needed. It is not a native event-loop transport: the h2 and h3 connections keep their own reader and writer threads, and a cancelled `await` stops waiting but lets the request in flight finish or time out. `gather` returns results in order (`exc=True` returns exceptions in place), `imap` yields as requests finish with a bounded window, and `aclose()` is safe to call twice.
+
+`InfStream` is the long loop behind `--stream`:
+
+- Speed is `slow` (4 threads, 5 req/s), `medium` (16, 25), `fast` (50, 100), or a rate in req/s from 0.1 to 200 (threads about half the rate, at most 50). `threads=` overrides the thread count, 1 to 50. These limits are enforced in the library, not only in the CLI.
+- One warm-up request runs alone first, so in `auto` mode the Alt-Svc offer is seen before the fan-out and 50 workers do not open 50 handshakes at once.
+- It stops at `n` requests, `dur` seconds, `max_fail` consecutive failures (default 500, 0 = off) or Ctrl-C. In-flight requests finish, a second Ctrl-C cancels them.
+- Memory stays flat: bodies are dropped, latencies live in a 2048-sample ring, at most 20 distinct error texts are kept, and the body limit defaults to 8 MiB per response. Error text is stripped of control characters.
+- Live stats go to stderr every 2 seconds: sent, ok, http_err, fail, rps, p50, p95 and the protocol mix.
+
+CLI:
+
+```
+python -m httpkit --auto --stream medium https://example.com
+python -m httpkit --auto --stream fast --threads 50 --duration 120 https://example.com
+python -m httpkit --stream 30 -n 5000 --feedback-json https://example.com
+python -m httpkit --h3 --stream slow -n 200 https://example.com
+```
+
+`--auto` is the default and just makes it explicit. `--stream` does not combine with `-o`, `-i` or `-I`. Without `--stream`, `-n` is still capped at 1000. Use it only on servers you own or are authorized to test.
+
 ## Proxies and user agents
 
 ```python
@@ -114,6 +154,7 @@ CLI: `-v` streams every step and ends with a problem summary, `-fb` prints the f
 
 | module | role |
 |---|---|
+| `aio.py` `stream.py` | `AsyncClient` (asyncio over the worker pool) and `InfStream` (rate-limited long loop, stats, `--stream`) |
 | `client.py` | pooling (h2 and h3: one multiplexed connection per origin and proxy; h1: up to `max_idle=4` idle connections), protocol selection, Alt-Svc, cookies, redirects, retries |
 | `h1.py` `body.py` | HTTP/1.1 wire format, chunked, content-encoding with bomb limits |
 | `h2.py` `hpack.py` | HTTP/2 multiplexed client, flow control, full HPACK |
@@ -132,6 +173,7 @@ CLI: `-v` streams every step and ends with a problem summary, `-fb` prints the f
 - Name lookups are cached for 30 seconds (`InfGuard`, 256 entries, oldest evicted first) and connections go to the cached IP, so the redirect check and the connection see the same answer. A pooled connection keeps its IP, and a new connection after the cache expires resolves again.
 - Redirects cannot downgrade https to http or change scheme. They cannot move from a public host into private, loopback or link-local space, which blocks redirect-based SSRF. Credentials and cookies are stripped on cross-origin hops, with loop detection and a hop limit. Private ranges include NAT64, 6to4, Teredo and IPv4-compatible addresses, which are judged by the IPv4 address inside them, plus documentation and shared ranges.
 - Certificates and hostnames are verified by default on all three protocols. `verify=False` is explicit.
+- `InfGuard` and the cookie `Jar` are locked, so 50 threads sharing a client cannot corrupt the DNS cache or the jar.
 - Decompression has a size cap, a ratio cap and a layer cap.
 - HTTP/2: PUSH_PROMISE is refused, control-frame floods, CONTINUATION floods and HPACK bombs are bounded, window overflows are enforced, and response headers are validated (pseudo-header order, uppercase names, connection-specific headers, content-length vs received bytes).
 - QUIC and HTTP/3: stateless resets are recognised from the tokens the server issued, so a restarted server fails the request at once instead of after the 30 s idle timeout. Flow-control violations, final-size changes, stream-limit abuse, crypto-buffer overflow, transport-parameter mismatches, and malformed or forbidden HTTP/3 frames close the connection. More incoming unidirectional streams than the advertised 16 close the connection too.

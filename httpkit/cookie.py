@@ -1,3 +1,4 @@
+import threading
 import time
 from email.utils import parsedate_to_datetime
 
@@ -108,32 +109,37 @@ class Jar:
     def __init__(self, max_n=180):
         self.c = {}
         self.max_n = max_n
+        self.lk = threading.RLock()
 
     def put(self, url, lines, now=None):
         now = now or time.time()
-        for ln in lines:
-            ck = parse_set_cookie(ln, url, now)
-            if ck is None:
-                continue
-            k = (ck.name, ck.dom, ck.path)
-            if ck.exp is not None and ck.exp <= now:
-                self.c.pop(k, None)
-                continue
-            if k not in self.c and len(self.c) >= self.max_n:
-                self.purge(now)
-                if len(self.c) >= self.max_n:
-                    self.c.pop(next(iter(self.c)))
-            self.c[k] = ck
+        with self.lk:
+            for ln in lines:
+                ck = parse_set_cookie(ln, url, now)
+                if ck is None:
+                    continue
+                k = (ck.name, ck.dom, ck.path)
+                if ck.exp is not None and ck.exp <= now:
+                    self.c.pop(k, None)
+                    continue
+                if k not in self.c and len(self.c) >= self.max_n:
+                    self.purge(now)
+                    if len(self.c) >= self.max_n:
+                        self.c.pop(next(iter(self.c)))
+                self.c[k] = ck
 
     def purge(self, now=None):
         now = now or time.time()
-        for k in [k for k, v in self.c.items() if v.exp is not None and v.exp <= now]:
-            del self.c[k]
+        with self.lk:
+            for k in [k for k, v in self.c.items() if v.exp is not None and v.exp <= now]:
+                del self.c[k]
 
     def match(self, url, now=None):
         now = now or time.time()
         out = []
-        for ck in self.c.values():
+        with self.lk:
+            cks = list(self.c.values())
+        for ck in cks:
             if ck.exp is not None and ck.exp <= now:
                 continue
             if ck.host_only:
@@ -156,4 +162,5 @@ class Jar:
         return "; ".join("%s=%s" % (c.name, c.val) for c in ms)
 
     def clear(self):
-        self.c.clear()
+        with self.lk:
+            self.c.clear()
