@@ -92,6 +92,14 @@ python -m httpkit --h3 --stream slow -n 200 https://example.com
 
 `--auto` is the default and just makes it explicit. `--stream` does not combine with `-o`, `-i` or `-I`. Without `--stream`, `-n` is still capped at 1000. Use it only on servers you own or are authorized to test.
 
+## Stock proxies
+
+`-sp` (or `--stock-proxy`) uses the library's own stock proxy list. On every run it downloads the lists fresh, writes them to `~/.cache/vso-httptool/stock_proxies.txt` and rotates through them. `--stock-proto http,socks5` limits which protocols are fetched.
+
+Stock proxies are free, public, unreliable and untrusted. Do not send sensitive data through them. They are not health-checked: the library does not test whether a proxy is alive. Check them yourself or skip dead ones in your own tool logic. `-sp` cannot combine with `--proxy*` or `--h3`.
+
+From Python: `fetch_stock(proto=None)` returns `(proxies, report)`, `write_stock_file()` also writes the txt file, `stock_file()` gives its path, and the result can go straight into `Client(proxies=...)`.
+
 ## Proxies and user agents
 
 ```python

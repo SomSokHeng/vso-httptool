@@ -40,6 +40,11 @@ options:
   --rotate MODE   round-robin (default), random or sticky
   --proxy-env     use http_proxy / https_proxy / all_proxy / no_proxy
   --no-proxy LIST comma list of hosts that bypass the proxy
+  -sp             use the library's bundled stock proxy list (free, public,
+                  unreliable, untrusted — re-fetched fresh every run, not
+                  health-checked; cannot combine with --proxy*)
+  --stock-proto L stock proxy protocols to fetch: comma list of http, https,
+                  socks4, socks5 (default: all)
   --ua STR        user-agent (repeatable)
   --ua-file F     read user-agents from a file, one per line
   --ua-rotate M   round-robin (default), random or sticky
@@ -74,7 +79,7 @@ def float_arg(a, v):
 
 
 def parse_args(av):
-    o = {"mth": None, "hdrs": [], "data": None, "json": None, "proto": "auto", "follow": False, "inc": False, "head": False, "verify": True, "ca": None, "out": None, "tmo": 30.0, "priv": False, "v": False, "url": None, "px": [], "rot": "round-robin", "penv": False, "nop": None, "uas": [], "urot": "round-robin", "n": None, "fb": False, "stream": None, "thr": None, "dur": None, "mf": 500, "fbj": False, "pxh": [], "pxs": []}
+    o = {"mth": None, "hdrs": [], "data": None, "json": None, "proto": "auto", "follow": False, "inc": False, "head": False, "verify": True, "ca": None, "out": None, "tmo": 30.0, "priv": False, "v": False, "url": None, "px": [], "rot": "round-robin", "penv": False, "nop": None, "uas": [], "urot": "round-robin", "n": None, "fb": False, "stream": None, "thr": None, "dur": None, "mf": 500, "fbj": False, "pxh": [], "pxs": [], "sp": False, "spp": None}
     i = 0
     while i < len(av):
         a = av[i]
@@ -142,6 +147,10 @@ def parse_args(av):
             o["penv"] = True
         elif a == "--no-proxy":
             o["nop"] = nxt()
+        elif a == "-sp" or a == "--stock-proxy":
+            o["sp"] = True
+        elif a == "--stock-proto":
+            o["spp"] = nxt()
         elif a == "--ua":
             o["uas"].append(nxt())
         elif a == "--ua-file":
@@ -204,6 +213,23 @@ def do_stream(o, mth, body, jb, kw):
     return 0 if st.ok else 1
 
 
+def do_stock(o):
+    from .sec import InfGuard
+    from .stock import VSO_STOCK_WARN, write_stock_file
+    sys.stderr.write("httpkit: %s\n" % VSO_STOCK_WARN)
+    proto = [x.strip() for x in o["spp"].split(",") if x.strip()] if o["spp"] else None
+    try:
+        path, items, report = write_stock_file(proto=proto, guard=InfGuard(blk_priv=True))
+    except Exception as e:
+        raise SystemExit("httpkit: stock proxy fetch failed: %s: %s" % (type(e).__name__, inf_safe(str(e)))) from None
+    sys.stderr.write("httpkit: stock proxy: %d proxies from %d/%d sources -> %s\n" % (
+        len(items), report["ok"], report["ok"] + report["fail"], path))
+    if o["v"]:
+        for name, v in sorted(report["sources"].items()):
+            sys.stderr.write("  %s: %s\n" % (name, v))
+    return items
+
+
 def do_req(o):
     if not o["url"]:
         sys.stdout.write(USG)
@@ -213,7 +239,14 @@ def do_req(o):
     mth = "HEAD" if o["head"] else (o["mth"] or ("POST" if body is not None or o["json"] else "GET"))
     jb = json.loads(o["json"]) if o["json"] is not None else None
     kw = {}
-    if o["pxh"] or o["pxs"]:
+    if o["sp"]:
+        if o["px"] or o["pxh"] or o["pxs"] or o["penv"]:
+            raise SystemExit("-sp cannot combine with --proxy, --proxy-http, --proxy-https or --proxy-env")
+        if o["proto"] == "h3":
+            raise SystemExit("-sp cannot be used with --h3: HTTP/3 cannot be used through a proxy")
+        kw["proxies"] = do_stock(o)
+        kw["rotate"] = o["rot"]
+    elif o["pxh"] or o["pxs"]:
         kw["proxies"] = {k: v for k, v in (("http", o["pxh"]), ("https", o["pxs"]), ("all", o["px"])) if v}
         kw["rotate"] = o["rot"]
     elif o["px"]:
